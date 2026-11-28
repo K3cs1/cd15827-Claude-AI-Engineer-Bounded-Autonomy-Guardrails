@@ -68,17 +68,30 @@ class Cause(BaseModel):
     cited_evidence: list[str] = Field(min_length=1)
 
 
-# TODO: Build the _ALLOWED_EVIDENCE_FIELDS frozenset below.
-# Each entry is a token a cited_evidence string may begin with. Include:
-#   - top-level container names: "defect_classification", "supplier_findings"
-#   - DefectClassification leaf fields: "defect_type", "severity", "description_summary"
-#   - SupplierFindings leaf fields: "component_records", "supplier_incident_summary"
-#   - ComponentRecord leaf fields: "component_id", "supplier", "lot_id", "received_at",
-#     "prior_incidents"
-#   - The refinement token "refinement" (used by the refinement loop later)
-# The allowlist is intentionally permissive (substring match, not exact equality), because
-# the model returns evidence strings like "defect_type=SOLDER-BRIDGE" rather than bare names.
-_ALLOWED_EVIDENCE_FIELDS: frozenset[str] = frozenset()
+# Tokens a cited_evidence string may reference. Matching is by substring, not equality,
+# because the model returns evidence strings like "defect_type=SOLDER-BRIDGE".
+_ALLOWED_EVIDENCE_FIELDS: frozenset[str] = frozenset(
+    {
+        # Top-level containers
+        "defect_classification",
+        "supplier_findings",
+        # DefectClassification fields
+        "defect_type",
+        "severity",
+        "description_summary",
+        # SupplierFindings fields
+        "component_records",
+        "supplier_incident_summary",
+        # ComponentRecord fields
+        "component_id",
+        "supplier",
+        "lot_id",
+        "received_at",
+        "prior_incidents",
+        # Used by the refinement loop
+        "refinement",
+    }
+)
 
 
 class RootCauseHypothesis(BaseModel):
@@ -88,15 +101,16 @@ class RootCauseHypothesis(BaseModel):
 
     ranked_causes: list[Cause] = Field(min_length=1)
 
-    # TODO: Implement a Pydantic model_validator(mode="after") named
-    # `_evidence_must_reference_known_fields` that iterates over every Cause in
-    # ranked_causes and every entry in cause.cited_evidence. If an entry contains
-    # NONE of the tokens in _ALLOWED_EVIDENCE_FIELDS as a substring, raise a
-    # ValueError naming which cause's evidence is rejected.
-    #
-    # (Friction note: a model_validator(mode="after") method MUST return `self` at the
-    # end. If you forget, the validator silently runs but its checks won't surface as
-    # expected, and frozen=True hides the misbehavior even more.)
+    @model_validator(mode="after")
+    def _evidence_must_reference_known_fields(self) -> RootCauseHypothesis:
+        for index, cause in enumerate(self.ranked_causes):
+            for evidence in cause.cited_evidence:
+                if not any(token in evidence for token in _ALLOWED_EVIDENCE_FIELDS):
+                    raise ValueError(
+                        f"ranked_causes[{index}] ({cause.text!r}): evidence {evidence!r} "
+                        "does not reference a known input field"
+                    )
+        return self
 
 
 class SubagentReport(BaseModel):
